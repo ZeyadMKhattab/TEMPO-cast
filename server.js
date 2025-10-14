@@ -1,13 +1,23 @@
 const express = require("express");
 const axios = require("axios");
-const fs = require("node:fs/promises");
-const fsSync = require("node:fs");
-const path = require("node:path");
 const NodeCache = require("node-cache");
 const serverless = require("serverless-http");
 const mongoose = require("mongoose");
-const nodemailer = require("nodemailer");
 require("dotenv").config();
+const compression = require("compression");
+const rateLimit = require("express-rate-limit");
+const cron = require("node-cron");
+
+// Define models before requiring routes that use them
+require("./models/subscriber");
+const gemsRoutes = require("./routes/gems");
+const notificationRoutes = require("./routes/notifications");
+const contactRoute = require("./routes/contact");
+const {
+  getAQICategoryForNotification,
+  getPersonalizedHealthAdvice,
+  sendEmailNotification,
+} = require("./utils/notifications");
 const app = express();
 
 const PORT = process.env.PORT || 3000;
@@ -38,6 +48,7 @@ const connectToDB = async () => {
       },
       // Timeouts to prevent the application from hanging indefinitely
       serverSelectionTimeoutMS: 15000, // 15 seconds to find a server
+      connectTimeoutMS: 30000, // 30 seconds to establish a connection
       socketTimeoutMS: 45000, // 45 seconds before a socket times out
       // Explicitly set the TLS version to 1.2, which can resolve handshake issues
       tlsAllowInvalidCertificates: false, // Ensure we are using valid certs
@@ -55,25 +66,6 @@ const connectToDB = async () => {
 // Initiate the database connection
 connectToDB();
 
-// Subscriber Schema
-const SubscriberSchema = new mongoose.Schema(
-  {
-    email: { type: String, required: true, unique: true, index: true },
-    phone: String,
-    notificationMethods: Object,
-    frequency: String,
-    healthProfile: Object,
-    threshold: String,
-    locations: Object,
-    active: { type: Boolean, default: true },
-    sensitivityLevel: String,
-    lastNotified: Date,
-  },
-  { timestamps: true }
-);
-
-const Subscriber = mongoose.model("Subscriber", SubscriberSchema);
-const compression = require("compression");
 app.use(compression());
 
 const cache = new NodeCache({ stdTTL: 300, checkperiod: 60 });
@@ -87,7 +79,6 @@ app.use(
 app.use(express.json());
 const router = express.Router();
 
-const rateLimit = require("express-rate-limit");
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 100,
@@ -96,188 +87,6 @@ const limiter = rateLimit({
 
 if (process.env.NODE_ENV === "production") {
   router.use(limiter);
-}
-
-// --- GEMS Image Service Integration ---
-const GEMS_API_KEY = process.env.OPEN_API_GEMS;
-const GEMS_DATA_DIR = path.join(require("os").tmpdir(), "gems_data");
-const GEMS_IMAGE_BOUNDS = [
-  [-34, 48],
-  [58, 168],
-];
-
-const gemsImageCache = new NodeCache({ stdTTL: 3600, checkperiod: 120 }); // 1 hour cache
-const gemsTimestampCache = new NodeCache({ stdTTL: 600, checkperiod: 120 }); // 10 minute cache for timestamps
-
-const GEMS_LAYERS = {
-  o3: {
-    baseUrl: "https://nesc.nier.go.kr:38032/api/GK2/L2/O3T/FOR/image",
-  },
-  hcho: {
-    baseUrl: "https://nesc.nier.go.kr:38032/api/GK2/L2/HCHO/FOR/image",
-  },
-  no2: {
-    baseUrl: "https://nesc.nier.go.kr:38032/api/GK2/L2/NO2_Trop/FOR/image",
-  },
-};
-
-async function fetchLatestGemsTimestamp(baseUrl) {
-  // Check cache for timestamp first
-  const cachedTimestamp = gemsTimestampCache.get(baseUrl);
-  if (cachedTimestamp) {
-    console.log(`[GEMS] Using cached timestamp: ${cachedTimestamp}`);
-    return cachedTimestamp;
-  }
-
-  const now = new Date();
-  const end = now.toISOString().slice(0, 16).replace(/[-T:]/g, "");
-  now.setHours(now.getHours() - 24);
-  const start = now.toISOString().slice(0, 16).replace(/[-T:]/g, "");
-
-  const url = `${baseUrl}/getFileDateList.do?sDate=${start}&eDate=${end}&format=json&key=${GEMS_API_KEY}`;
-
-  console.log(`[GEMS] Fetching timestamp from: ${url}`);
-
-  try {
-    const response = await fetch(url, {
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        Accept: "application/json",
-      },
-    });
-
-    console.log(`[GEMS] Timestamp API response status: ${response.status}`);
-
-    if (!response.ok) {
-      const text = await response.text();
-      console.error(
-        `[GEMS] Timestamp API error response:`,
-        text.substring(0, 200)
-      );
-      throw new Error(`GEMS API returned status: ${response.status}`);
-    }
-
-    const data = await response.json();
-
-    if (!data || !Array.isArray(data.list) || data.list.length === 0) {
-      console.error(
-        `[GEMS] Invalid data structure:`,
-        JSON.stringify(data).substring(0, 200)
-      );
-      throw new Error(`GEMS API returned no data.`);
-    }
-
-    const timestamps = data.list.map((item) => item.item);
-    console.log(
-      `[GEMS] Found ${timestamps.length} timestamps, latest: ${
-        timestamps[timestamps.length - 1]
-      }`
-    );
-
-    const latestTimestamp = timestamps.sort().pop();
-    // Cache the fetched timestamp
-    gemsTimestampCache.set(baseUrl, latestTimestamp);
-    return latestTimestamp;
-  } catch (error) {
-    console.error(`[GEMS] fetchLatestGemsTimestamp failed:`, error);
-    throw error;
-  }
-}
-
-async function fetchGemsImage(layerName) {
-  const layer = GEMS_LAYERS[layerName];
-  if (!layer) {
-    throw new Error(`Unknown GEMS layer: ${layerName}`);
-  }
-
-  // Check cache first
-  const cachedImage = gemsImageCache.get(layerName);
-  if (cachedImage) {
-    console.log(`[GEMS-${layerName.toUpperCase()}] Using cached image`);
-    return cachedImage;
-  }
-
-  console.log(`[GEMS-${layerName.toUpperCase()}] Fetching fresh image...`);
-
-  try {
-    // Get latest timestamp
-    const timestamp = await fetchLatestGemsTimestamp(layer.baseUrl);
-    console.log(
-      `[GEMS-${layerName.toUpperCase()}] Latest timestamp: ${timestamp}`
-    );
-
-    // Download image with timeout
-    const imageUrl = `${layer.baseUrl}/getFileItem.do?date=${timestamp}&key=${GEMS_API_KEY}`;
-    console.log(`[GEMS-${layerName.toUpperCase()}] Fetching from: ${imageUrl}`);
-
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 25000); // 25 second timeout
-
-    const response = await fetch(imageUrl, { signal: controller.signal });
-    clearTimeout(timeout);
-
-    console.log(
-      `[GEMS-${layerName.toUpperCase()}] Response status: ${response.status}`
-    );
-    console.log(
-      `[GEMS-${layerName.toUpperCase()}] Content-Type: ${response.headers.get(
-        "content-type"
-      )}`
-    );
-
-    if (!response.ok) {
-      throw new Error(`Download failed with status ${response.status}`);
-    }
-
-    const imageBuffer = Buffer.from(await response.arrayBuffer());
-    console.log(
-      `[GEMS-${layerName.toUpperCase()}] Image downloaded (${
-        imageBuffer.length
-      } bytes, ${(imageBuffer.length / 1024 / 1024).toFixed(2)} MB)`
-    );
-
-    // Verify it's actually an image
-    if (imageBuffer.length < 100) {
-      throw new Error(
-        `Image too small (${imageBuffer.length} bytes) - likely not a valid image`
-      );
-    }
-
-    // Check PNG magic bytes
-    const isPNG =
-      imageBuffer[0] === 0x89 &&
-      imageBuffer[1] === 0x50 &&
-      imageBuffer[2] === 0x4e &&
-      imageBuffer[3] === 0x47;
-    if (!isPNG) {
-      console.warn(
-        `[GEMS-${layerName.toUpperCase()}] Warning: Does not appear to be a PNG file`
-      );
-      console.log(
-        `[GEMS-${layerName.toUpperCase()}] First bytes:`,
-        imageBuffer.slice(0, 10)
-      );
-    }
-
-    // Cache the image buffer in memory
-    gemsImageCache.set(layerName, imageBuffer);
-    console.log(`[GEMS-${layerName.toUpperCase()}] Image cached successfully`);
-
-    return imageBuffer;
-  } catch (error) {
-    if (error.name === "AbortError") {
-      console.error(
-        `[GEMS-${layerName.toUpperCase()}] Fetch timeout after 25s`
-      );
-      throw new Error("GEMS API request timed out");
-    }
-    console.error(
-      `[GEMS-${layerName.toUpperCase()}] Fetch failed:`,
-      error.message
-    );
-    throw error;
-  }
 }
 
 const getCacheKey = (lat, lon, endpoint) => `${endpoint}_${lat}_${lon}`;
@@ -407,474 +216,18 @@ router.get("/health", (req, res) => {
       stats: cache.getStats(),
     },
     gems: {
-      cachedLayers: gemsImageCache.keys(),
-      cacheStats: gemsImageCache.getStats(),
+      cachedLayers: gemsRoutes.gemsImageCache.keys(),
+      cacheStats: gemsRoutes.gemsImageCache.getStats(),
     },
-  });
-});
-
-// GEMS image endpoint - fetch on demand
-router.get("/gems/:layer/image", async (req, res) => {
-  const layerName = req.params.layer;
-
-  if (!GEMS_LAYERS[layerName]) {
-    return res.status(404).json({ error: "Unknown GEMS layer" });
-  }
-
-  try {
-    console.log(`[GEMS-${layerName}] Image request received`);
-    const imageBuffer = await fetchGemsImage(layerName);
-    console.log(
-      `[GEMS-${layerName}] Sending image (${imageBuffer.length} bytes)`
-    );
-
-    res.set("Content-Type", "image/png");
-    res.set("Cache-Control", "public, max-age=3600"); // Cache for 1 hour
-    res.set("Content-Length", imageBuffer.length);
-    res.send(imageBuffer);
-  } catch (error) {
-    console.error(`[GEMS-${layerName}] Error:`, error);
-    res.status(503).json({
-      error: "Failed to fetch GEMS image",
-      message: error.message,
-      layer: layerName,
-      stack: process.env.NODE_ENV === "development" ? error.stack : undefined,
-    });
-  }
-});
-
-// Debug endpoint to test GEMS API connectivity
-router.get("/gems/:layer/debug", async (req, res) => {
-  const layerName = req.params.layer;
-  const layer = GEMS_LAYERS[layerName];
-
-  if (!layer) {
-    return res.status(404).json({ error: "Unknown GEMS layer" });
-  }
-
-  const debugInfo = {
-    layer: layerName,
-    baseUrl: layer.baseUrl,
-    apiKey: GEMS_API_KEY ? `${GEMS_API_KEY.substring(0, 10)}...` : "NOT SET",
-    cached: gemsImageCache.has(layerName),
-    cacheStats: gemsImageCache.getStats(),
-    steps: [],
-  };
-
-  try {
-    // Step 1: Get timestamp
-    debugInfo.steps.push({ step: 1, action: "Fetching timestamp list..." });
-    const now = new Date();
-    const end = now.toISOString().slice(0, 16).replace(/[-T:]/g, "");
-    now.setHours(now.getHours() - 24);
-    const start = now.toISOString().slice(0, 16).replace(/[-T:]/g, "");
-
-    const listUrl = `${layer.baseUrl}/getFileDateList.do?sDate=${start}&eDate=${end}&format=json&key=${GEMS_API_KEY}`;
-    debugInfo.listUrl = listUrl;
-
-    const listResponse = await fetch(listUrl);
-    debugInfo.steps.push({
-      step: 1,
-      status: listResponse.status,
-      ok: listResponse.ok,
-    });
-
-    if (!listResponse.ok) {
-      throw new Error(`Timestamp API returned ${listResponse.status}`);
-    }
-
-    const listData = await listResponse.json();
-    debugInfo.steps.push({
-      step: 1,
-      result: "success",
-      dataReceived: listData.list?.length || 0,
-    });
-
-    if (!listData.list || listData.list.length === 0) {
-      throw new Error("No timestamps available");
-    }
-
-    const timestamp = listData.list
-      .map((item) => item.item)
-      .sort()
-      .pop();
-    debugInfo.timestamp = timestamp;
-    debugInfo.steps.push({
-      step: 2,
-      action: "Latest timestamp",
-      value: timestamp,
-    });
-
-    // Step 2: Try to fetch image
-    const imageUrl = `${layer.baseUrl}/getFileItem.do?date=${timestamp}&key=${GEMS_API_KEY}`;
-    debugInfo.imageUrl = imageUrl;
-    debugInfo.steps.push({ step: 3, action: "Fetching image..." });
-
-    const imageResponse = await fetch(imageUrl);
-    debugInfo.steps.push({
-      step: 3,
-      status: imageResponse.status,
-      ok: imageResponse.ok,
-      contentType: imageResponse.headers.get("content-type"),
-      contentLength: imageResponse.headers.get("content-length"),
-    });
-
-    if (imageResponse.ok) {
-      const imageBuffer = Buffer.from(await imageResponse.arrayBuffer());
-      debugInfo.steps.push({
-        step: 3,
-        result: "success",
-        imageSize: imageBuffer.length,
-        imageSizeMB: (imageBuffer.length / 1024 / 1024).toFixed(2),
-      });
-      debugInfo.success = true;
-    } else {
-      debugInfo.success = false;
-      debugInfo.error = `Image fetch returned ${imageResponse.status}`;
-    }
-
-    res.json(debugInfo);
-  } catch (error) {
-    debugInfo.success = false;
-    debugInfo.error = error.message;
-    debugInfo.errorStack =
-      process.env.NODE_ENV === "development" ? error.stack : undefined;
-    res.status(500).json(debugInfo);
-  }
-});
-
-// GEMS bounds endpoint - always returns bounds immediately
-router.get("/gems/:layer/bounds", async (req, res) => {
-  const layerName = req.params.layer;
-
-  if (!GEMS_LAYERS[layerName]) {
-    return res.status(404).json({ error: "Unknown GEMS layer" });
-  }
-
-  // Always return bounds immediately - no "ready" check needed
-  res.json({
-    bounds: GEMS_IMAGE_BOUNDS,
-    layer: layerName,
-    cached: gemsImageCache.has(layerName),
   });
 });
 
 router.get("/cache-stats", (req, res) => {
   res.json({
     weather: cache.getStats(),
-    gems: gemsImageCache.getStats(),
+    gems: gemsRoutes.gemsImageCache.getStats(),
   });
 });
-
-app.use("/api/", router);
-
-app.use((err, req, res, _next) => {
-  console.error(err.stack);
-  res.status(500).json({ error: "Something went wrong!" });
-});
-
-router.post("/notifications/subscribe", async (req, res) => {
-  try {
-    const {
-      email,
-      phone,
-      notificationMethods,
-      frequency,
-      healthProfile,
-      threshold,
-      locations,
-    } = req.body;
-
-    if (!email || !email.includes("@")) {
-      return res.status(400).json({ error: "Valid email is required" });
-    }
-
-    let subscriber = await Subscriber.findOne({ email });
-    const isNewSubscriber = !subscriber;
-
-    if (subscriber) {
-      console.log(`[Notifications] Updating existing subscriber: ${email}`);
-      subscriber.set({
-        phone: phone,
-        notificationMethods: notificationMethods,
-        frequency: frequency,
-        healthProfile: healthProfile,
-        threshold: threshold,
-        locations: locations,
-        active: true,
-      });
-    } else {
-      // Create new subscriber
-      console.log(`[Notifications] Creating new subscriber: ${email}`);
-      subscriber = new Subscriber({
-        email,
-        phone: phone,
-        notificationMethods: notificationMethods,
-        frequency: frequency,
-        healthProfile: healthProfile,
-        threshold: threshold,
-        locations: locations,
-      });
-    }
-
-    // Ensure healthProfile exists before calculating sensitivity
-    if (subscriber.healthProfile) {
-      subscriber.sensitivityLevel = calculateSensitivityLevel(
-        subscriber.healthProfile
-      );
-    }
-
-    await subscriber.save();
-
-    console.log(
-      `[Notifications] Subscriber saved: ${email} (ID: ${subscriber._id})`
-    );
-
-    if (isNewSubscriber) {
-      await sendWelcomeEmail(subscriber);
-    }
-
-    res.json({
-      success: true,
-      subscriberId: subscriber._id,
-      message: "Successfully subscribed to air quality notifications",
-      subscriber: {
-        email: subscriber.email,
-        frequency: subscriber.frequency,
-        sensitivityLevel: subscriber.sensitivityLevel,
-      },
-    });
-  } catch (error) {
-    console.error("[Notifications] Subscription error:", error);
-    res.status(500).json({ error: "Failed to subscribe to notifications" });
-  }
-});
-
-// Update subscription preferences
-router.put("/notifications/update/:subscriberId", async (req, res) => {
-  try {
-    const { subscriberId } = req.params;
-    // Add a check for a valid ObjectId format
-    if (!mongoose.Types.ObjectId.isValid(subscriberId)) {
-      return res.status(404).json({ error: "Subscriber not found" });
-    }
-
-    const subscriber = await Subscriber.findById(subscriberId);
-
-    if (!subscriber) {
-      return res.status(404).json({ error: "Subscriber not found" });
-    }
-
-    // Update fields
-    const allowedUpdates = [
-      "notificationMethods",
-      "frequency",
-      "healthProfile",
-      "threshold",
-      "locations",
-      "phone",
-    ];
-
-    allowedUpdates.forEach((field) => {
-      if (req.body[field] !== undefined) {
-        subscriber[field] = req.body[field];
-      }
-    });
-
-    subscriber.sensitivityLevel = calculateSensitivityLevel(
-      subscriber.healthProfile
-    );
-    await subscriber.save();
-
-    console.log(`[Notifications] Preferences updated for ${subscriber.email}`);
-
-    res.json({
-      success: true,
-      message: "Preferences updated successfully",
-      subscriber: {
-        email: subscriber.email,
-        frequency: subscriber.frequency,
-        sensitivityLevel: subscriber.sensitivityLevel,
-      },
-    });
-  } catch (error) {
-    // Handle specific MongoDB duplicate key errors (for unique email)
-    if (error.code === 11000) {
-      console.error(
-        `[Notifications] Update error: Duplicate email - ${req.body.email}`
-      );
-      return res
-        .status(409)
-        .json({ error: "This email address is already subscribed." });
-    }
-    console.error("[Notifications] Update error:", error);
-    res.status(500).json({ error: "Failed to update preferences" });
-  }
-});
-
-router.post("/contact", async (req, res) => {
-  const { name, email, message } = req.body;
-
-  if (!name || !email || !message) {
-    return res.status(400).json({ error: "All fields are required." });
-  }
-
-  // Ensure email credentials are set
-  if (!process.env.EMAIL_USER || !process.env.EMAIL_PASSWORD) {
-    console.error(
-      "[Contact Form] Error: EMAIL_USER and EMAIL_PASSWORD must be set in .env file."
-    );
-    return res.status(500).json({ error: "Server is not configured for sending emails." });
-  }
-
-  const transporter = nodemailer.createTransport({
-    service: process.env.EMAIL_SERVICE || "gmail",
-    auth: {
-      user: process.env.EMAIL_USER,
-      pass: process.env.EMAIL_PASSWORD,
-    },
-  });
-
-  const mailOptions = {
-    from: `"${name}" <${email}>`,
-    to: process.env.CONTACT_EMAIL || process.env.EMAIL_USER, // Send to your contact email
-    subject: `New Contact Form Message from ${name}`,
-    html: `
-      <div style="font-family: Arial, sans-serif; line-height: 1.6;">
-        <h2>New Message from Global TEMPO Contact Form</h2>
-        <p><strong>Name:</strong> ${name}</p>
-        <p><strong>Email:</strong> <a href="mailto:${email}">${email}</a></p>
-        <hr>
-        <h3>Message:</h3>
-        <p style="background: #f4f4f4; padding: 15px; border-radius: 5px;">
-          ${message.replace(/\n/g, "<br>")}
-        </p>
-      </div>
-    `,
-  };
-
-  try {
-    await transporter.sendMail(mailOptions);
-    console.log(`[Contact Form] Message sent from ${email}`);
-    res.json({ success: true, message: "Message sent successfully!" });
-  } catch (error) {
-    console.error("[Contact Form] Error sending email:", error);
-    res.status(500).json({ error: "Failed to send message." });
-  }
-});
-
-// Unsubscribe endpoint
-router.delete("/notifications/unsubscribe/:subscriberId", async (req, res) => {
-  try {
-    const { subscriberId } = req.params;
-    const subscriber = await Subscriber.findByIdAndUpdate(
-      subscriberId,
-      { active: false, unsubscribedAt: new Date() },
-      { new: true }
-    );
-
-    if (!subscriber) {
-      return res.status(404).json({ error: "Subscriber not found" });
-    }
-
-    console.log(`[Notifications] Unsubscribed: ${subscriber.email}`);
-
-    res.json({
-      success: true,
-      message: "Successfully unsubscribed from notifications",
-    });
-  } catch (error) {
-    console.error("[Notifications] Unsubscribe error:", error);
-    res.status(500).json({ error: "Failed to unsubscribe" });
-  }
-});
-
-// Resubscribe endpoint
-router.post("/notifications/resubscribe/:subscriberId", async (req, res) => {
-  try {
-    const { subscriberId } = req.params;
-    if (!mongoose.Types.ObjectId.isValid(subscriberId)) {
-      return res.status(400).json({ error: "Invalid subscriber ID format" });
-    }
-
-    const subscriber = await Subscriber.findByIdAndUpdate(
-      subscriberId,
-      { active: true },
-      { new: true }
-    );
-
-    if (!subscriber) {
-      return res.status(404).json({ error: "Subscriber not found" });
-    }
-
-    console.log(`[Notifications] Resubscribed: ${subscriber.email}`);
-
-    res.json({
-      success: true,
-      message: "Successfully resubscribed to notifications",
-      subscriberId: subscriber._id,
-    });
-  } catch (error) {
-    console.error("[Notifications] Resubscribe error:", error);
-    res.status(500).json({ error: "Failed to resubscribe" });
-  }
-});
-
-// Get subscriber preferences
-router.get("/notifications/preferences/:subscriberId", async (req, res) => {
-  try {
-    const { subscriberId } = req.params;
-    const subscriber = await Subscriber.findById(subscriberId);
-
-    if (!subscriber || !subscriber.active) {
-      return res.status(404).json({ error: "Subscriber not found" });
-    }
-
-    res.json({
-      success: true,
-      subscriber,
-    });
-  } catch (error) {
-    console.error("[Notifications] Get preferences error:", error);
-    res.status(500).json({ error: "Failed to retrieve preferences" });
-  }
-});
-
-// Helper function to calculate sensitivity level
-function calculateSensitivityLevel(healthProfile) {
-  // If no health profile is provided, default to low sensitivity.
-  if (!healthProfile) {
-    return "low";
-  }
-
-  let score = 0;
-
-  // Age-based sensitivity
-  if (
-    healthProfile.ageGroup &&
-    (healthProfile.ageGroup === "child" || healthProfile.ageGroup === "senior")
-  ) {
-    score += 2;
-  }
-
-  // Conditions
-  if (Array.isArray(healthProfile.conditions)) {
-    const highRiskConditions = ["asthma", "copd", "heart"];
-    healthProfile.conditions.forEach((condition) => {
-      score += highRiskConditions.includes(condition) ? 3 : 1;
-    });
-  }
-
-  // Other factors
-  if (healthProfile.pregnant) score += 2;
-  if (healthProfile.outdoorWorker) score += 1;
-  if (healthProfile.athlete) score += 1;
-
-  // Determine level
-  if (score >= 5) return "high";
-  if (score >= 2) return "moderate";
-  return "low";
-}
 
 const AQI_BREAKPOINTS = {
   pm2_5: [
@@ -938,6 +291,13 @@ const AQI_BREAKPOINTS = {
   ],
 };
 
+const POLLUTANT_CONVERSION_FACTORS = {
+  o3: 1.96, // μg/m³ to ppb
+  co: 1145, // μg/m³ to ppm
+  so2: 2.62, // μg/m³ to ppb
+  no2: 1.88, // μg/m³ to ppb
+};
+
 function calculateIndividualAQI(concentration, pollutant) {
   if (concentration < 0) return 0;
 
@@ -980,25 +340,25 @@ function calculateOverallAQI(components) {
 
   // O3 (μg/m³) - convert to ppb (μg/m³ / 1.96 ≈ ppb for O3)
   if (components.o3) {
-    const o3_ppb = components.o3 / 1.96; // Convert μg/m³ to ppb
+    const o3_ppb = components.o3 / POLLUTANT_CONVERSION_FACTORS.o3;
     individualAQIs.o3 = calculateIndividualAQI(o3_ppb, "o3_8hr");
   }
 
   // CO (μg/m³) - convert to ppm (μg/m³ / 1145 ≈ ppm for CO)
   if (components.co) {
-    const co_ppm = components.co / 1145; // Convert μg/m³ to ppm
+    const co_ppm = components.co / POLLUTANT_CONVERSION_FACTORS.co;
     individualAQIs.co = calculateIndividualAQI(co_ppm, "co");
   }
 
   // SO2 (μg/m³) - convert to ppb (μg/m³ / 2.62 ≈ ppb for SO2)
   if (components.so2) {
-    const so2_ppb = components.so2 / 2.62; // Convert μg/m³ to ppb
+    const so2_ppb = components.so2 / POLLUTANT_CONVERSION_FACTORS.so2;
     individualAQIs.so2 = calculateIndividualAQI(so2_ppb, "so2");
   }
 
   // NO2 (μg/m³) - convert to ppb (μg/m³ / 1.88 ≈ ppb for NO2)
   if (components.no2) {
-    const no2_ppb = components.no2 / 1.88; // Convert μg/m³ to ppb
+    const no2_ppb = components.no2 / POLLUTANT_CONVERSION_FACTORS.no2;
     individualAQIs.no2 = calculateIndividualAQI(no2_ppb, "no2");
   }
 
@@ -1008,6 +368,7 @@ function calculateOverallAQI(components) {
 
 // Check air quality and send notifications (scheduled job)
 async function checkAndNotifySubscribers() {
+  const Subscriber = mongoose.model("Subscriber");
   const subscribers = await Subscriber.find({ active: true });
   console.log(
     `[Notifications] Checking AQ for ${subscribers.length} active subscribers`
@@ -1100,6 +461,20 @@ function shouldNotify(subscriber, currentAQI) {
   return hoursSinceLastNotification >= requiredHours;
 }
 
+function parseLocationCoordinates(location) {
+  if (!location) return null;
+
+  const coordMatch = location.match(/(-?\d+\.?\d*),\s*(-?\d+\.?\d*)/);
+  if (coordMatch) {
+    return {
+      lat: parseFloat(coordMatch[1]),
+      lon: parseFloat(coordMatch[2]),
+    };
+  }
+
+  return null;
+}
+
 // Send notification to subscriber
 async function sendNotification(subscriber, aqi, components) {
   const aqiCategory = getAQICategoryForNotification(aqi);
@@ -1119,325 +494,7 @@ async function sendNotification(subscriber, aqi, components) {
   // The subscriber.notificationMethods.email check is now implicit
 }
 
-function parseLocationCoordinates(location) {
-  if (!location) return null;
-
-  const coordMatch = location.match(/(-?\d+\.?\d*),\s*(-?\d+\.?\d*)/);
-  if (coordMatch) {
-    return {
-      lat: parseFloat(coordMatch[1]),
-      lon: parseFloat(coordMatch[2]),
-    };
-  }
-
-  return null;
-}
-
-// Get AQI category for notifications
-function getAQICategoryForNotification(aqi) {
-  if (aqi >= 301) return { level: "Hazardous", color: "#7e0023", emoji: "☠️" };
-  if (aqi >= 201)
-    return { level: "Very Unhealthy", color: "#8f3f97", emoji: "⚠️" };
-  if (aqi >= 151) return { level: "Unhealthy", color: "#ff0000", emoji: "⚠️" };
-  if (aqi >= 101)
-    return {
-      level: "Unhealthy for Sensitive Groups",
-      color: "#ff7e00",
-      emoji: "⚡",
-    };
-  if (aqi >= 51) return { level: "Moderate", color: "#ffff00", emoji: "ℹ️" };
-  return { level: "Good", color: "#00e400", emoji: "✅" };
-}
-
-// Generate personalized health advice
-function getPersonalizedHealthAdvice(healthProfile, aqi, components) {
-  const advice = [];
-
-  // High-risk conditions
-  if (
-    healthProfile.conditions.includes("asthma") ||
-    healthProfile.conditions.includes("copd")
-  ) {
-    if (aqi >= 101) {
-      advice.push("⚠️ IMPORTANT: Stay indoors and avoid all outdoor activity");
-      advice.push("💊 Keep your rescue inhaler accessible");
-    } else if (aqi >= 51) {
-      advice.push("⚠️ Limit outdoor activities and watch for symptoms");
-    }
-  }
-
-  if (healthProfile.conditions.includes("heart")) {
-    if (aqi >= 101) {
-      advice.push(
-        "❤️ Avoid strenuous activities - increased cardiovascular risk"
-      );
-    }
-  }
-
-  // Age-based advice
-  if (healthProfile?.ageGroup === "child") {
-    if (aqi >= 101) {
-      advice.push(
-        "👶 Keep children indoors - their lungs are still developing"
-      );
-    }
-  }
-  if (healthProfile?.ageGroup === "senior") {
-    if (aqi >= 101) {
-      advice.push("👴 Seniors: Stay indoors and monitor health closely");
-    }
-  }
-
-  // Pregnancy
-  if (healthProfile?.pregnant) {
-    if (aqi >= 101) {
-      advice.push("🤰 Pregnant: Avoid outdoor exposure to protect your baby");
-    }
-  }
-
-  // Outdoor workers
-  if (healthProfile?.outdoorWorker) {
-    if (aqi >= 101) {
-      advice.push("👷 Work outdoors? Wear N95 mask and take frequent breaks");
-    }
-  }
-
-  // Athletes
-  if (healthProfile?.athlete) {
-    if (aqi >= 101) {
-      advice.push("🏃 Cancel outdoor exercise - move workout indoors");
-    } else if (aqi >= 51) {
-      advice.push("🏃 Reduce exercise intensity outdoors");
-    }
-  }
-
-  // Pollutant-specific advice
-  if (components.pm2_5 > 55.5) {
-    advice.push("😷 Wear N95/KN95 mask if going outside");
-    advice.push("🏠 Use air purifier indoors");
-  }
-
-  if (components.o3 / 1.96 > 125) {
-    advice.push("☀️ Avoid outdoor activities during peak sun hours (10am-4pm)");
-  }
-
-  // General advice
-  if (aqi >= 151) {
-    advice.push("🚪 Close windows and doors");
-    advice.push("💧 Stay well hydrated");
-    advice.push("📞 Contact doctor if experiencing symptoms");
-  }
-
-  return advice;
-}
-
-async function sendEmailNotification(
-  subscriber,
-  aqi,
-  aqiCategory,
-  healthAdvice
-) {
-  const emailHTML = `
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <style>
-        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
-        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-        .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }
-        .content { background: white; padding: 30px; border: 1px solid #e5e7eb; }
-        .aqi-badge { display: inline-block; padding: 15px 30px; background: ${
-          aqiCategory.color
-        }; color: white; font-size: 24px; font-weight: bold; border-radius: 8px; margin: 20px 0; }
-        .advice { background: #f9fafb; padding: 15px; border-left: 4px solid ${
-          aqiCategory.color
-        }; margin: 15px 0; }
-        .advice ul { margin: 10px 0; padding-left: 20px; }
-        .footer { text-align: center; padding: 20px; color: #6b7280; font-size: 12px; }
-        .button { display: inline-block; padding: 12px 24px; background: #667eea; color: white; text-decoration: none; border-radius: 6px; margin: 15px 0; }
-      </style>
-    </head>
-    <body>
-      <div class="container">
-        <div class="header">
-          <h1>${aqiCategory.emoji} Air Quality Alert</h1>
-          <p>Personalized notification for ${subscriber.locations.home}</p>
-        </div>
-        <div class="content">
-          <h2>Current Air Quality</h2>
-          <div class="aqi-badge">AQI ${aqi} - ${aqiCategory.level}</div>
-          
-          <div class="advice">
-            <h3>Your Personalized Health Recommendations:</h3>
-            <ul>
-              ${healthAdvice.map((advice) => `<li>${advice}</li>`).join("")}
-            </ul>
-          </div>
-          
-          <p><strong>What does this mean for you?</strong></p>
-          <p>Based on your health profile (${
-            subscriber.healthProfile.conditions.join(", ") ||
-            "no specific conditions"
-          }${
-    subscriber.healthProfile.ageGroup
-      ? `, ${subscriber.healthProfile.ageGroup}`
-      : ""
-  }), current air quality conditions may affect your health.</p>
-          
-          <a href="https://globaltempo.netlify.app/app?lat=${
-            subscriber.locations.home
-          }" class="button">
-            View Detailed Forecast →
-          </a>
-          
-          <hr style="margin: 30px 0; border: none; border-top: 1px solid #e5e7eb;">
-          
-          <p style="font-size: 14px; color: #6b7280;">
-            <strong>Stay Updated:</strong> We'll continue monitoring air quality in your area and send you updates based on your preferences (${
-              subscriber.frequency
-            } notifications).
-          </p>
-        </div>
-        <div class="footer">
-          <p>Global TEMPO Air Quality Monitoring</p>
-          <p>Powered by NASA TEMPO Satellite Data</p>
-          <p><a href="https://globaltempo.netlify.app/unsubscribe/${subscriber._id}" style="color: #6b7280;">
-            Unsubscribe
-          </a></p>
-        </div>
-      </div>
-    </body>
-    </html>
-  `;
-
-  try {
-    // Ensure email credentials are set
-    if (!process.env.EMAIL_USER || !process.env.EMAIL_PASSWORD) {
-      console.error(
-        "[Email] Error: EMAIL_USER and EMAIL_PASSWORD must be set in .env file."
-      );
-      return false;
-    }
-
-    const transporter = nodemailer.createTransport({
-      service: process.env.EMAIL_SERVICE || "gmail",
-      auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASSWORD,
-      },
-    });
-
-    await transporter.sendMail({
-      from: '"Global TEMPO Alerts" <alerts@globaltempo.com>',
-      to: subscriber.email,
-      subject: `${aqiCategory.emoji} Air Quality Alert - AQI ${aqi}`,
-      html: emailHTML,
-    });
-
-    console.log(
-      `[Email] Notification sent successfully to ${subscriber.email}`
-    );
-    return true;
-  } catch (error) {
-    console.error(
-      `[Email] Failed to send notification to ${subscriber.email}:`,
-      error
-    );
-    return false;
-  }
-}
-
-async function sendWelcomeEmail(subscriber) {
-  const emailHTML = `
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <style>
-        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
-        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-        .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }
-        .content { background: white; padding: 30px; border: 1px solid #e5e7eb; }
-        .advice { background: #f9fafb; padding: 15px; border-left: 4px solid #667eea; margin: 15px 0; }
-        .advice ul { margin: 10px 0; padding-left: 20px; }
-        .footer { text-align: center; padding: 20px; color: #6b7280; font-size: 12px; }
-        .button { display: inline-block; padding: 12px 24px; background: #667eea; color: white; text-decoration: none; border-radius: 6px; margin: 15px 0; }
-      </style>
-    </head>
-    <body>
-      <div class="container">
-        <div class="header">
-          <h1>🎉 Welcome to Global TEMPO Alerts!</h1>
-          <p>You're now subscribed to personalized air quality notifications.</p>
-        </div>
-        <div class="content">
-          <h2>Hello ${subscriber.email},</h2>
-          <p>Thank you for subscribing! We're excited to help you stay informed about the air you breathe.</p>
-          
-          <div class="advice">
-            <h3>What to expect:</h3>
-            <ul>
-              <li>Alerts when the air quality in your monitored locations reaches the threshold you set.</li>
-              <li>Notifications according to your chosen frequency (${subscriber.frequency}).</li>
-              <li>Personalized health tips based on your profile.</li>
-            </ul>
-          </div>
-          
-          <a href="https://globaltempo.netlify.app/app" class="button">
-            Explore the App
-          </a>
-          
-          <hr style="margin: 30px 0; border: none; border-top: 1px solid #e5e7eb;">
-          
-          <p style="font-size: 14px; color: #6b7280;">
-            You can manage your preferences at any time.
-          </p>
-        </div>
-        <div class="footer">
-          <p>Global TEMPO Air Quality Monitoring</p>
-          <p><a href="https://globaltempo.netlify.app/unsubscribe/${subscriber._id}" style="color: #6b7280;">
-            Unsubscribe
-          </a></p>
-        </div>
-      </div>
-    </body>
-    </html>
-  `;
-
-  try {
-    if (!process.env.EMAIL_USER || !process.env.EMAIL_PASSWORD) {
-      console.error(
-        "[Email] Welcome Email Error: EMAIL_USER and EMAIL_PASSWORD must be set."
-      );
-      return;
-    }
-
-    const transporter = nodemailer.createTransport({
-      service: process.env.EMAIL_SERVICE || "gmail",
-      auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASSWORD },
-    });
-
-    await transporter.sendMail({
-      from: '"Global TEMPO Alerts" <alerts@globaltempo.com>',
-      to: subscriber.email,
-      subject: "🎉 Welcome to Global TEMPO Air Quality Alerts!",
-      html: emailHTML,
-    });
-
-    console.log(
-      `[Email] Welcome email sent successfully to ${subscriber.email}`
-    );
-  } catch (error) {
-    console.error(
-      `[Email] Failed to send welcome email to ${subscriber.email}:`,
-      error
-    );
-  }
-}
-
 // Schedule notifications check (run every hour)
-const cron = require("node-cron");
-
-// Run every hour
 cron.schedule(
   "0 * * * *",
   () => {
@@ -1450,81 +507,16 @@ cron.schedule(
   }
 );
 
-// Manual trigger endpoint for testing
-router.post("/notifications/test", async (req, res) => {
-  try {
-    const { email } = req.body;
-    if (!email) {
-      return res
-        .status(400)
-        .json({ error: "Email is required in the request body" });
-    }
+// Mount routers
+router.use("/gems", gemsRoutes.router);
+router.use("/notifications", notificationRoutes);
+router.use("/contact", contactRoute);
 
-    // Create a mock subscriber object for the test
-    const subscriber = {
-      email: email,
-      locations: { home: "Test Location" },
-      healthProfile: {
-        conditions: ["asthma"],
-        ageGroup: "adult",
-        pregnant: false,
-        outdoorWorker: true,
-        athlete: false,
-      },
-    };
-    // Send test notification
-    const testAQI = 125;
-    const testComponents = {
-      pm2_5: 45,
-      pm10: 80,
-      o3: 200,
-      no2: 60,
-      so2: 30,
-      co: 500,
-    };
+app.use("/api/", router);
 
-    const aqiCategory = getAQICategoryForNotification(testAQI);
-    const healthAdvice = getPersonalizedHealthAdvice(
-      subscriber.healthProfile,
-      testAQI,
-      testComponents
-    );
-
-    const emailSent = await sendEmailNotification(
-      subscriber,
-      testAQI,
-      aqiCategory,
-      healthAdvice
-    );
-    if (!emailSent) throw new Error("sendEmailNotification returned false.");
-
-    res.json({
-      success: true,
-      message: "Test notification sent",
-      details: {
-        aqi: testAQI,
-        category: aqiCategory.level,
-        adviceCount: healthAdvice.length,
-      },
-    });
-  } catch (error) {
-    console.error("[Notifications] Test error:", error);
-    res.status(500).json({ error: "Failed to send test notification" });
-  }
-});
-
-// Admin endpoint to list all subscribers (add authentication in production)
-router.get("/notifications/admin/subscribers", async (req, res) => {
-  const subscribers = await Subscriber.find({}).select(
-    "id email frequency sensitivityLevel active createdAt lastNotified"
-  );
-
-  res.json({
-    success: true,
-    total: subscribers.length,
-    active: subscribers.filter((s) => s.active).length,
-    subscribers,
-  });
+app.use((err, req, res, _next) => {
+  console.error(err.stack);
+  res.status(500).json({ error: "Something went wrong!" });
 });
 
 module.exports.checkAndNotifySubscribers = checkAndNotifySubscribers;
