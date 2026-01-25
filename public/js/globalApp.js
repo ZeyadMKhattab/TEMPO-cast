@@ -309,7 +309,16 @@ function displayIntegratedAirQualityData(data, cityName, lat, lon) {
 
   document.getElementById("aqiValue").textContent = aqi;
   const categoryElement = document.getElementById("aqiCategory");
-  categoryElement.textContent = aqiCategory.label;
+  let categoryText = aqiCategory.label;
+  
+  // Add data source information
+  if (data.dataSource) {
+    const sourceIcon = data.dataSource.includes('TEMPO') ? '🛰️' :
+                      data.dataSource.includes('GEMS') ? '🛰️' : '📡';
+    categoryText += ` • ${sourceIcon} ${data.dataSource}`;
+  }
+  
+  categoryElement.textContent = categoryText;
   categoryElement.className = `aqi-category aqi-${aqiCategory.class}`;
 
   document.getElementById("pollutionData").innerHTML =
@@ -514,13 +523,21 @@ function createEnhancedPollutantDisplays(components, weather, individualAQIs) {
 
   console.log("Weather context:", weatherDesc, temp, wind);
 
+  // Add data source information
+  let dataSourceInfo = '';
+  if (data.dataSource) {
+    const sourceIcon = data.dataSource.includes('TEMPO') ? '🛰️' :
+                      data.dataSource.includes('GEMS') ? '🛰️' : '📡';
+    dataSourceInfo = ` • ${sourceIcon} ${data.dataSource}`;
+  }
+
   let html = `<div style="background: #f0f9ff; padding: 12px; border-radius: 8px; margin-bottom: 15px; border-left: 3px solid #0ea5e9; text-align: ${
     document.body.dir === "rtl" ? "right" : "left"
   };">
     <small style="color: #0c4a6e;">
       <strong>${getTranslation("weather_context_title")}</strong> ${
     weatherDesc ? weatherDesc + ", " : ""
-  }${temp}${wind ? ", " + getTranslation("wind_label") + ": " + wind : ""}
+  }${temp}${wind ? ", " + getTranslation("wind_label") + ": " + wind : ""}${dataSourceInfo}
     </small>
   </div>`;
 

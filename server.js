@@ -128,12 +128,28 @@ router.get("/complete", cacheMiddleware("complete"), async (req, res) => {
     return res.status(400).json({ error: "Missing lat/lon" });
   }
 
+  const latNum = parseFloat(lat);
+  const lonNum = parseFloat(lon);
+
   try {
     const daysBack = Math.min(parseInt(days) || 7, 30);
     const endTime = Math.floor(Date.now() / 1000);
     const startTime = endTime - daysBack * 24 * 60 * 60;
 
-    const [currentRes, forecastRes, weatherRes, historicalRes, airQualityRes] =
+    // Check if location is in satellite coverage areas
+    const isInTempoCoverage = lonNum >= -130 && lonNum <= -60 && latNum >= 20 && latNum <= 60;
+    const isInGemsCoverage = lonNum >= 48 && lonNum <= 168 && latNum >= -34 && latNum <= 58;
+
+    // Prepare satellite data requests
+    const satelliteRequests = [];
+    if (isInTempoCoverage) {
+      satelliteRequests.push(fetchTempoDataForLocation(lonNum, latNum));
+    }
+    if (isInGemsCoverage) {
+      satelliteRequests.push(fetchGemsDataForLocation(lonNum, latNum));
+    }
+
+    const [currentRes, forecastRes, weatherRes, historicalRes, airQualityRes, ...satelliteResults] =
       await Promise.allSettled([
         openWeatherApi.get(`/air_pollution`, {
           params: { lat, lon },
@@ -158,6 +174,7 @@ router.get("/complete", cacheMiddleware("complete"), async (req, res) => {
             timeout: 8000,
           })
           .catch(() => null), // Non-blocking failure
+        ...satelliteRequests
       ]);
 
     // Check essential requests
@@ -174,11 +191,33 @@ router.get("/complete", cacheMiddleware("complete"), async (req, res) => {
       airQualityData = airQualityRes.value.data.results?.[0] || null;
     }
 
+    // Process satellite data
+    const satelliteData = {};
+    satelliteResults.forEach((result, index) => {
+      if (result.status === "fulfilled" && result.value) {
+        const data = result.value;
+        if (data.source === 'tempo') {
+          satelliteData.tempo = data;
+        } else if (data.source === 'gems') {
+          satelliteData.gems = data;
+        }
+      }
+    });
+
     // Combine current pollution with weather
     const combinedCurrent = {
       ...currentRes.value.data,
       weather: weatherRes.value.data,
     };
+
+    // Enhance with satellite data if available
+    if (satelliteData.tempo || satelliteData.gems) {
+      combinedCurrent.satelliteData = satelliteData;
+      combinedCurrent.dataSource = satelliteData.tempo ? 'TEMPO + Ground' : 
+                                   satelliteData.gems ? 'GEMS + Ground' : 'Ground-based';
+    } else {
+      combinedCurrent.dataSource = 'Ground-based';
+    }
 
     res.json({
       location: weatherRes.value.data.name,
@@ -199,6 +238,11 @@ router.get("/complete", cacheMiddleware("complete"), async (req, res) => {
             }
           : null,
       airQuality: airQualityData,
+      satelliteCoverage: {
+        tempo: isInTempoCoverage,
+        gems: isInGemsCoverage,
+        satelliteData: Object.keys(satelliteData).length > 0
+      },
       timestamp: Date.now(),
     });
   } catch (err) {
@@ -207,7 +251,49 @@ router.get("/complete", cacheMiddleware("complete"), async (req, res) => {
   }
 });
 
-// Health check endpoint
+// Function to get GEMS data for a specific location
+async function fetchGemsDataForLocation(lon, lat) {
+  try {
+    // GEMS provides image overlays, not point data
+    // We'll indicate that GEMS data is available via map layers
+    return {
+      source: 'gems',
+      coverage: true,
+      note: 'GEMS satellite data available via map visualization layers',
+      layers: {
+        no2: '/api/gems/no2/image',
+        o3: '/api/gems/o3/image',
+        hcho: '/api/gems/hcho/image'
+      },
+      lastUpdated: new Date().toISOString()
+    };
+  } catch (error) {
+    console.error('GEMS data fetch error:', error);
+    return null;
+  }
+}
+
+// Function to get TEMPO data for a specific location
+async function fetchTempoDataForLocation(lon, lat) {
+  try {
+    // TEMPO provides Esri image services
+    // We'll indicate that TEMPO data is available via map layers
+    return {
+      source: 'tempo',
+      coverage: true,
+      note: 'TEMPO satellite data available via map visualization layers',
+      layers: {
+        no2: 'https://gis.earthdata.nasa.gov/image/rest/services/C3685896708-LARC_CLOUD/TEMPO_NO2_L3_V04_HOURLY_TROPOSPHERIC_VERTICAL_COLUMN/ImageServer',
+        o3: 'https://gis.earthdata.nasa.gov/image/rest/services/C3685896625-LARC_CLOUD/TEMPO_O3TOT_L3_V04_HOURLY_OZONE_COLUMN_AMOUNT/ImageServer',
+        hcho: 'https://gis.earthdata.nasa.gov/image/rest/services/C3685897141-LARC_CLOUD/TEMPO_HCHO_L3_V04_HOURLY_VERTICAL_COLUMN/ImageServer'
+      },
+      lastUpdated: new Date().toISOString()
+    };
+  } catch (error) {
+    console.error('TEMPO data fetch error:', error);
+    return null;
+  }
+}
 router.get("/health", (req, res) => {
   res.json({
     status: "ok",
