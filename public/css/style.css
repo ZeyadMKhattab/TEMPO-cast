@@ -405,6 +405,70 @@ section {
   text-align: left;
 }
 
+/* Hardware Section */
+.hardware-section {
+  padding: 60px 20px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  text-align: center;
+}
+
+.hardware-section h2 {
+  font-size: 2.5rem;
+  margin-bottom: 20px;
+  color: white;
+}
+
+.hardware-section p {
+  font-size: 1.1rem;
+  margin-bottom: 40px;
+  max-width: 800px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.hardware-overview {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 40px;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.hardware-image img {
+  width: 100%;
+  max-width: 400px;
+  border-radius: 12px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+}
+
+.hardware-details {
+  flex: 1;
+  min-width: 300px;
+  text-align: left;
+}
+
+.hardware-details h3 {
+  font-size: 1.8rem;
+  margin-bottom: 20px;
+  color: white;
+}
+
+.hardware-details ul {
+  list-style: none;
+  padding: 0;
+}
+
+.hardware-details li {
+  margin-bottom: 10px;
+  font-size: 1rem;
+}
+
+.hardware-details strong {
+  color: #ffd700;
+}
+
 /* Resources Section - Mobile First */
 #resources h2 {
   font-size: clamp(1.8rem, 4vw, 2.5rem);

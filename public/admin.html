@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Admin - Subscribers | Global TEMPO</title>
+    <style>
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+          Helvetica, Arial, sans-serif;
+        margin: 0;
+        padding-bottom: 50px;
+        background-color: #f4f7f9;
+        color: #333;
+      }
+      #notification-area {
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        z-index: 1000;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .notification {
+        padding: 15px 20px;
+        border-radius: 5px;
+        color: white;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+        opacity: 0;
+        transition: opacity 0.5s, transform 0.5s;
+        transform: translateX(100%);
+      }
+      .notification.show {
+        opacity: 1;
+        transform: translateX(0);
+      }
+      .notification.success {
+        background-color: #2ecc71;
+      }
+      .notification.error {
+        background-color: #e74c3c;
+      }
+
+      .container {
+        max-width: 1200px;
+        margin: 20px auto;
+        padding: 20px;
+        background-color: #fff;
+        border-radius: 8px;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+      }
+      h1 {
+        color: #2c3e50;
+        border-bottom: 2px solid #667eea;
+        padding-bottom: 10px;
+        margin-bottom: 20px;
+      }
+      #stats {
+        display: flex;
+        gap: 20px;
+        margin-bottom: 20px;
+      }
+      #stats div {
+        background: #ecf0f1;
+        padding: 15px;
+        border-radius: 5px;
+        flex-grow: 1;
+        text-align: center;
+      }
+      #stats span {
+        display: block;
+        font-size: 2em;
+        font-weight: bold;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 20px;
+      }
+      th,
+      td {
+        padding: 12px;
+        border: 1px solid #ddd;
+        text-align: left;
+      }
+      th {
+        background-color: #667eea;
+        color: white;
+      }
+      tr:nth-child(even) {
+        background-color: #f9f9f9;
+      }
+      .status-active {
+        color: green;
+        font-weight: bold;
+      }
+      .status-inactive {
+        color: red;
+      }
+      .delete-btn {
+        background-color: #e74c3c;
+        color: white;
+        border: none;
+        padding: 5px 10px;
+        border-radius: 4px;
+        cursor: pointer;
+      }
+      .view-btn {
+        background-color: #3498db;
+        margin-right: 5px;
+      }
+      .action-buttons {
+        display: flex;
+        gap: 5px;
+      }
+      .btn {
+        padding: 10px 20px;
+        background-color: #667eea;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 1em;
+      }
+      .modal {
+        display: none;
+        position: fixed;
+        z-index: 1001;
+        left: 0;
+        top: 0;
+        width: 100%;
+        height: 100%;
+        overflow: auto;
+        background-color: rgba(0, 0, 0, 0.5);
+      }
+      .modal-content {
+        background-color: #fefefe;
+        margin: 5% auto;
+        padding: 20px;
+        border: 1px solid #888;
+        width: 80%;
+        max-width: 700px;
+        border-radius: 8px;
+        position: relative;
+      }
+      .modal-close {
+        color: #aaa;
+        float: right;
+        font-size: 28px;
+        font-weight: bold;
+        cursor: pointer;
+      }
+      .form-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+        gap: 20px;
+      }
+      .form-group {
+        display: flex;
+        flex-direction: column;
+      }
+      .form-group label {
+        margin-bottom: 5px;
+        font-weight: bold;
+      }
+      .form-group input,
+      .form-group select,
+      .form-group textarea {
+        padding: 8px;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        width: 100%;
+        box-sizing: border-box;
+      }
+      .checkbox-group label {
+        display: block;
+        margin-bottom: 5px;
+      }
+      .form-actions {
+        margin-top: 20px;
+        text-align: right;
+      }
+      #broadcast-form {
+        background: #ecf0f1;
+        padding: 20px;
+        border-radius: 5px;
+        margin-bottom: 20px;
+      }
+      #broadcast-form textarea {
+        min-height: 150px;
+        resize: vertical;
+      }
+      .section-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 20px;
+      }
+      .view-modal-content p {
+        margin: 5px 0;
+      }
+      .view-modal-content strong {
+        display: inline-block;
+        width: 150px;
+      }
+      .sortable {
+        cursor: pointer;
+        position: relative;
+        padding-right: 20px !important;
+      }
+      .sortable::before,
+      .sortable::after {
+        position: absolute;
+        right: 5px;
+        font-size: 0.8em;
+        opacity: 0.4;
+      }
+      .sortable::before {
+        content: "▲";
+        top: 50%;
+        transform: translateY(-120%);
+      }
+      .sortable::after {
+        content: "▼";
+        bottom: 50%;
+        transform: translateY(120%);
+      }
+      .sortable.asc::before,
+      .sortable.desc::after {
+        opacity: 1;
+        color: #fff;
+      }
+      #filter-row input,
+      #filter-row select {
+        width: 100%;
+        padding: 6px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="notification-area"></div>
+    <div class="container">
+      <h1>Subscriber Management</h1>
+      <div id="stats">
+        <div>Total Subscribers<span id="total-subscribers">...</span></div>
+        <div>Active Subscribers<span id="active-subscribers">...</span></div>
+      </div>
+
+      <div id="broadcast-form" class="form-group">
+        <h2>Send Broadcast Email</h2>
+        <label for="broadcast-subject">Subject</label>
+        <input type="text" id="broadcast-subject" placeholder="Email Subject" />
+        <label for="broadcast-message" style="margin-top: 10px">Message</label>
+        <textarea id="broadcast-message" placeholder="Compose your message..."></textarea>
+        <div class="form-actions">
+          <button id="send-broadcast-btn" class="btn">Send to All Active Subscribers</button>
+        </div>
+      </div>
+
+      <div class="section-header">
+        <h2>Subscribers List</h2>
+        <button id="add-subscriber-btn" class="btn">Add New Subscriber</button>
+      </div>
+      <div id="subscriber-table-container">
+        <p id="loading-message">Loading subscribers...</p>
+        <table id="subscriber-table" style="display: none">
+          <thead>
+            <tr>
+              <th class="sortable" data-sort-by="email">Email</th>
+              <th class="sortable" data-sort-by="active">Status</th>
+              <th class="sortable" data-sort-by="frequency">Frequency</th>
+              <th class="sortable" data-sort-by="threshold">Threshold</th>
+              <th class="sortable" data-sort-by="createdAt">Subscribed On</th>
+              <th class="sortable" data-sort-by="lastNotified">Last Notified</th>
+              <th>Actions</th>
+            </tr>
+            <tr id="filter-row">
+              <td><input type="text" id="filter-email" placeholder="Filter email..." /></td>
+              <td>
+                <select id="filter-status">
+                  <option value="">All</option>
+                  <option value="true">Active</option>
+                  <option value="false">Inactive</option>
+                </select>
+              </td>
+              <td><input type="text" id="filter-frequency" placeholder="Filter..." /></td>
+              <td><input type="text" id="filter-threshold" placeholder="Filter..." /></td>
+              <td colspan="3"></td>
+            </tr>
+          </thead>
+          <tbody id="subscriber-list"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div id="subscriber-modal" class="modal">
+      <div class="modal-content">
+        <span class="modal-close">&times;</span>
+        <h2 id="modal-title">Subscriber Details</h2>
+        <div id="view-details-content" style="display: none;"></div>
+        <form id="subscriber-form" style="display: none;">
+          <input type="hidden" id="subscriber-id" />
+          <div class="form-grid">
+            <div class="form-group">
+              <label for="subscriber-email">Email</label>
+              <input type="email" id="subscriber-email" required />
+            </div>
+            <div class="form-group">
+              <label for="subscriber-active">Status</label>
+              <select id="subscriber-active">
+                <option value="true">Active</option>
+                <option value="false">Inactive</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="subscriber-frequency">Frequency</label>
+              <select id="subscriber-frequency">
+                <option value="realtime">Real-time</option>
+                <option value="hourly">Hourly</option>
+                <option value="daily">Daily</option>
+                <option value="weekly">Weekly</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="subscriber-threshold">Threshold</label>
+              <select id="subscriber-threshold">
+                <option value="sensitive">Sensitive (>50)</option>
+                <option value="standard">Standard (>100)</option>
+                <option value="high">High (>150)</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="subscriber-ageGroup">Age Group</label>
+              <select id="subscriber-ageGroup">
+                <option value="unspecified">Unspecified</option>
+                <option value="child">Child</option>
+                <option value="adult">Adult</option>
+                <option value="senior">Senior</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Health Conditions</label>
+              <div class="checkbox-group" id="subscriber-conditions">
+                <label><input type="checkbox" value="asthma" /> Asthma</label>
+                <label><input type="checkbox" value="copd" /> COPD</label>
+                <label><input type="checkbox" value="heart" /> Heart Disease</label>
+                <label><input type="checkbox" value="allergies" /> Allergies</label>
+                <label><input type="checkbox" value="other" /> Other</label>
+              </div>
+            </div>
+          </div>
+          <div class="form-actions">
+            <button type="submit" class="btn">Save Changes</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <script src="./js/admin.js"></script>
+  </body>
+</html>

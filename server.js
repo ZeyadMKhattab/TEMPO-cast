@@ -5,13 +5,17 @@ const serverless = require("serverless-http");
 const mongoose = require("mongoose");
 require("dotenv").config();
 const compression = require("compression");
+const basicAuth = require("express-basic-auth");
+const path = require("path");
 const rateLimit = require("express-rate-limit");
 const cron = require("node-cron");
 
-// Define models before requiring routes that use them
+const cache = new NodeCache({ stdTTL: 300, checkperiod: 60 }); // 5 minute cache
+
 require("./models/subscriber");
 const gemsRoutes = require("./routes/gems");
 const notificationRoutes = require("./routes/notifications");
+const adminRoutes = require("./routes/admin");
 const contactRoute = require("./routes/contact");
 const {
   getAQICategoryForNotification,
@@ -22,8 +26,6 @@ const app = express();
 
 const PORT = process.env.PORT || 3000;
 
-
-// Create a dedicated axios instance for OpenWeatherMap API
 const openWeatherApi = axios.create({
   baseURL: "http://api.openweathermap.org/data/2.5",
   params: {
@@ -33,49 +35,42 @@ const openWeatherApi = axios.create({
 
 app.set("trust proxy", 1);
 
-/**
- * Connect to MongoDB with retry logic and detailed logging.
- */
 const connectToDB = async () => {
   try {
     console.log("Attempting to connect to MongoDB Atlas...");
-    await mongoose.connect(process.env.MONGODB_URI, {
-      // These options are recommended for modern MongoDB Atlas connections
+    await mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/tempo', {
       serverApi: {
         version: "1",
         strict: true,
         deprecationErrors: true,
       },
-      // Timeouts to prevent the application from hanging indefinitely
-      serverSelectionTimeoutMS: 15000, // 15 seconds to find a server
-      connectTimeoutMS: 30000, // 30 seconds to establish a connection
-      socketTimeoutMS: 45000, // 45 seconds before a socket times out
-      // Explicitly set the TLS version to 1.2, which can resolve handshake issues
-      tlsAllowInvalidCertificates: false, // Ensure we are using valid certs
+      serverSelectionTimeoutMS: 15000,
+      connectTimeoutMS: 30000,
+      socketTimeoutMS: 45000,
+      tlsAllowInvalidCertificates: false,
     });
     console.log("✅ MongoDB connected successfully.");
   } catch (err) {
     console.error("❌ MongoDB connection error:", err.message);
     console.error("Full error details:", err);
-    // In a production environment, you might want to exit the process
-    // if the database connection is critical for the app to run.
-    // process.exit(1);
   }
 };
 
-// Initiate the database connection
 connectToDB();
+
+const adminUsers = {
+  [process.env.ADMIN_USER || "admin"]:
+    process.env.ADMIN_PASSWORD || "supersecretpassword",
+};
+
+const adminAuth = basicAuth({
+  users: adminUsers,
+  challenge: true,
+  realm: "AdminArea",
+});
 
 app.use(compression());
 
-const cache = new NodeCache({ stdTTL: 300, checkperiod: 60 });
-
-app.use(
-  express.static("public", {
-    maxAge: "1h",
-    etag: true,
-  })
-);
 app.use(express.json());
 const router = express.Router();
 
@@ -88,6 +83,16 @@ const limiter = rateLimit({
 if (process.env.NODE_ENV === "production") {
   router.use(limiter);
 }
+
+router.use("/gems", gemsRoutes.router);
+router.use("/notifications", notificationRoutes());
+router.use("/contact", contactRoute);
+app.use("/admin", adminAuth, adminRoutes); // Secure all admin routes
+app.use("/api", router);
+
+app.use(express.static("public", { maxAge: "1h", etag: true }));
+
+app.get("/favicon.ico", (req, res) => res.status(204).send());
 
 const getCacheKey = (lat, lon, endpoint) => `${endpoint}_${lat}_${lon}`;
 
@@ -104,10 +109,8 @@ const cacheMiddleware = (endpoint) => {
       return res.json(cachedData);
     }
 
-    // Store original json method
     const originalJson = res.json;
 
-    // Override json method to cache the response
     res.json = function (data) {
       cache.set(cacheKey, data);
       console.log(`Cached data for ${endpoint}: ${cacheKey}`);
@@ -118,7 +121,6 @@ const cacheMiddleware = (endpoint) => {
   };
 };
 
-// Optimized complete endpoint with intelligent caching and parallel processing
 router.get("/complete", cacheMiddleware("complete"), async (req, res) => {
   const { lat, lon, days } = req.query;
 
@@ -131,7 +133,6 @@ router.get("/complete", cacheMiddleware("complete"), async (req, res) => {
     const endTime = Math.floor(Date.now() / 1000);
     const startTime = endTime - daysBack * 24 * 60 * 60;
 
-    // Use Promise.allSettled for better error handling
     const [currentRes, forecastRes, weatherRes, historicalRes, airQualityRes] =
       await Promise.allSettled([
         openWeatherApi.get(`/air_pollution`, {
@@ -506,13 +507,6 @@ cron.schedule(
     timezone: "UTC",
   }
 );
-
-// Mount routers
-router.use("/gems", gemsRoutes.router);
-router.use("/notifications", notificationRoutes);
-router.use("/contact", contactRoute);
-
-app.use("/api/", router);
 
 app.use((err, req, res, _next) => {
   console.error(err.stack);

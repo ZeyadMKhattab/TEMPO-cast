@@ -4,24 +4,25 @@ const HealthProfileSchema = new mongoose.Schema(
   {
     ageGroup: {
       type: String,
-      enum: ["child", "teen", "adult", "senior"],
+      enum: ["unspecified", "child", "adult", "senior"],
+      default: "unspecified",
     },
     conditions: [
       {
         type: String,
-        enum: ["asthma", "copd", "heart", "allergies"],
+        enum: ["asthma", "copd", "heart", "allergies", "other"],
       },
     ],
     pregnant: { type: Boolean, default: false },
     outdoorWorker: { type: Boolean, default: false },
     athlete: { type: Boolean, default: false },
   },
-  { _id: false } // Prevents Mongoose from creating an _id for the sub-document
+  { _id: false } 
 );
 
 const LocationSchema = new mongoose.Schema(
   {
-    home: { type: String, trim: true }, // e.g., "40.7128,-74.0060"
+    home: { type: String, trim: true }, 
     work: { type: String, trim: true },
   },
   { _id: false }
@@ -63,5 +64,4 @@ const SubscriberSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// The model is compiled and exported. Mongoose will not compile the same model twice.
 module.exports = mongoose.model("Subscriber", SubscriberSchema);

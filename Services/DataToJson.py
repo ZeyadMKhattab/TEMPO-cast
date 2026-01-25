@@ -29,6 +29,10 @@ for species, tempokey in species_to_process.items():
     df = api.to_dataframe(tempokey, unit_keys=False, parse_dates=True, backend="xdr")
     print(df)
 
+    if df.empty:
+        print(f"Warning: No data retrieved for {species}. Skipping processing.")
+        continue
+
     raw_json_filename = f"{locname}_tempo_{species}_raw.json"
     df.to_json(raw_json_filename, orient="records", indent=4)
     print(f"\n--- Saved raw data ({len(df)} rows) to {raw_json_filename} ---")
