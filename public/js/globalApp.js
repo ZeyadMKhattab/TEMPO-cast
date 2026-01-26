@@ -322,7 +322,7 @@ function displayIntegratedAirQualityData(data, cityName, lat, lon) {
   categoryElement.className = `aqi-category aqi-${aqiCategory.class}`;
 
   document.getElementById("pollutionData").innerHTML =
-    createEnhancedPollutantDisplays(components, weatherData, individualAQIs);
+    createEnhancedPollutantDisplays(components, weatherData, individualAQIs, data);
 
   updateHealthRecommendations(aqi, components, weatherData);
   document.getElementById("pollutionSection").classList.add("show");
@@ -498,7 +498,7 @@ function getColorForPollutant(pollutant, value) {
   return getAQICategory(aqi).color;
 }
 
-function createEnhancedPollutantDisplays(components, weather, individualAQIs) {
+function createEnhancedPollutantDisplays(components, weather, individualAQIs, data) {
   let weatherDesc = "";
   let temp = "";
   let wind = "";
