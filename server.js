@@ -3,6 +3,7 @@ const axios = require("axios");
 const NodeCache = require("node-cache");
 const serverless = require("serverless-http");
 const mongoose = require("mongoose");
+const dns = require("node:dns");
 require("dotenv").config();
 const compression = require("compression");
 const basicAuth = require("express-basic-auth");
@@ -29,6 +30,16 @@ const IS_SERVERLESS =
   process.env.NETLIFY === "true" ||
   Boolean(process.env.AWS_LAMBDA_FUNCTION_NAME);
 let connectionPromise;
+
+if (!IS_SERVERLESS && process.env.MONGODB_DNS_SERVERS) {
+  const dnsServers = process.env.MONGODB_DNS_SERVERS.split(",")
+    .map((server) => server.trim())
+    .filter(Boolean);
+  if (dnsServers.length > 0) {
+    dns.setServers(dnsServers);
+    console.log(`Using configured DNS servers for MongoDB: ${dnsServers.join(", ")}`);
+  }
+}
 
 const openWeatherApi = axios.create({
   baseURL: "http://api.openweathermap.org/data/2.5",
