@@ -31,8 +31,12 @@ const IS_SERVERLESS =
   Boolean(process.env.AWS_LAMBDA_FUNCTION_NAME);
 let connectionPromise;
 
-if (!IS_SERVERLESS && process.env.MONGODB_DNS_SERVERS) {
-  const dnsServers = process.env.MONGODB_DNS_SERVERS.split(",")
+const configuredMongoDnsServers =
+  process.env.MONGODB_DNS_SERVERS || process.env.MONGODB_DNS_SERVER;
+
+if (!IS_SERVERLESS && configuredMongoDnsServers) {
+  const dnsServers = configuredMongoDnsServers
+    .split(",")
     .map((server) => server.trim())
     .filter(Boolean);
   if (dnsServers.length > 0) {
