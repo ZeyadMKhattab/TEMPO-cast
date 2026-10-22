@@ -25,6 +25,10 @@ const {
 const app = express();
 
 const PORT = process.env.PORT || 3000;
+const IS_SERVERLESS =
+  process.env.NETLIFY === "true" ||
+  Boolean(process.env.AWS_LAMBDA_FUNCTION_NAME);
+let connectionPromise;
 
 const openWeatherApi = axios.create({
   baseURL: "http://api.openweathermap.org/data/2.5",
@@ -35,10 +39,26 @@ const openWeatherApi = axios.create({
 
 app.set("trust proxy", 1);
 
-const connectToDB = async () => {
-  try {
-    console.log("Attempting to connect to MongoDB Atlas...");
-    await mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/tempo', {
+const connectToDB = () => {
+  if (mongoose.connection.readyState === 1) {
+    return Promise.resolve();
+  }
+  if (connectionPromise && mongoose.connection.readyState === 2) {
+    return connectionPromise;
+  }
+
+  const mongoUri =
+    process.env.MONGODB_URI ||
+    (IS_SERVERLESS ? null : "mongodb://localhost:27017/tempo");
+  if (!mongoUri) {
+    return Promise.reject(
+      new Error("MONGODB_URI must be configured for Netlify deployments."),
+    );
+  }
+
+  console.log("Attempting to connect to MongoDB...");
+  connectionPromise = mongoose
+    .connect(mongoUri, {
       serverApi: {
         version: "1",
         strict: true,
@@ -48,15 +68,36 @@ const connectToDB = async () => {
       connectTimeoutMS: 30000,
       socketTimeoutMS: 45000,
       tlsAllowInvalidCertificates: false,
+    })
+    .then(() => {
+      console.log("✅ MongoDB connected successfully.");
+    })
+    .catch((error) => {
+      connectionPromise = null;
+      throw error;
     });
-    console.log("✅ MongoDB connected successfully.");
-  } catch (err) {
-    console.error("❌ MongoDB connection error:", err.message);
-    console.error("Full error details:", err);
-  }
+
+  return connectionPromise;
 };
 
-connectToDB();
+if (!IS_SERVERLESS) {
+  connectToDB().catch((error) => {
+    console.error(
+      "❌ MongoDB connection error; database-backed routes will return 503:",
+      error,
+    );
+  });
+}
+
+const requireDatabase = async (_req, res, next) => {
+  try {
+    await connectToDB();
+    next();
+  } catch (error) {
+    console.error("❌ MongoDB connection error:", error);
+    res.status(503).json({ error: "Database is currently unavailable." });
+  }
+};
 
 const adminUsers = {
   [process.env.ADMIN_USER || "admin"]:
@@ -85,9 +126,9 @@ if (process.env.NODE_ENV === "production") {
 }
 
 router.use("/gems", gemsRoutes.router);
-router.use("/notifications", notificationRoutes());
+router.use("/notifications", requireDatabase, notificationRoutes());
 router.use("/contact", contactRoute);
-app.use("/admin", adminAuth, adminRoutes); // Secure all admin routes
+app.use("/admin", adminAuth, requireDatabase, adminRoutes); // Secure all admin routes
 app.use("/api", router);
 
 app.use(express.static("public", { maxAge: "1h", etag: true }));
@@ -137,8 +178,10 @@ router.get("/complete", cacheMiddleware("complete"), async (req, res) => {
     const startTime = endTime - daysBack * 24 * 60 * 60;
 
     // Check if location is in satellite coverage areas
-    const isInTempoCoverage = lonNum >= -130 && lonNum <= -60 && latNum >= 20 && latNum <= 60;
-    const isInGemsCoverage = lonNum >= 48 && lonNum <= 168 && latNum >= -34 && latNum <= 58;
+    const isInTempoCoverage =
+      lonNum >= -130 && lonNum <= -60 && latNum >= 20 && latNum <= 60;
+    const isInGemsCoverage =
+      lonNum >= 48 && lonNum <= 168 && latNum >= -34 && latNum <= 58;
 
     // Prepare satellite data requests
     const satelliteRequests = [];
@@ -149,37 +192,43 @@ router.get("/complete", cacheMiddleware("complete"), async (req, res) => {
       satelliteRequests.push(fetchGemsDataForLocation(lonNum, latNum));
     }
 
-    const [currentRes, forecastRes, weatherRes, historicalRes, airQualityRes, ...satelliteResults] =
-      await Promise.allSettled([
-        openWeatherApi.get(`/air_pollution`, {
-          params: { lat, lon },
-          timeout: 5000,
-        }),
-        openWeatherApi.get(`/air_pollution/forecast`, {
-          params: { lat, lon },
+    const [
+      currentRes,
+      forecastRes,
+      weatherRes,
+      historicalRes,
+      airQualityRes,
+      ...satelliteResults
+    ] = await Promise.allSettled([
+      openWeatherApi.get(`/air_pollution`, {
+        params: { lat, lon },
+        timeout: 5000,
+      }),
+      openWeatherApi.get(`/air_pollution/forecast`, {
+        params: { lat, lon },
+        timeout: 8000,
+      }),
+      openWeatherApi.get(`/weather`, {
+        params: { lat, lon, units: "metric" },
+        timeout: 5000,
+      }),
+      openWeatherApi.get(`/air_pollution/history`, {
+        params: { lat, lon, start: startTime, end: endTime },
+        timeout: 10000,
+      }),
+      axios
+        .get(`https://api.openaq.org/v3/locations`, {
+          headers: { "X-API-Key": process.env.OPENAQ_API_KEY },
+          params: { coordinates: `${lat},${lon}`, radius: 25000, limit: 1 },
           timeout: 8000,
-        }),
-        openWeatherApi.get(`/weather`, {
-          params: { lat, lon, units: "metric" },
-          timeout: 5000,
-        }),
-        openWeatherApi.get(`/air_pollution/history`, {
-          params: { lat, lon, start: startTime, end: endTime },
-          timeout: 10000,
-        }),
-        axios
-          .get(`https://api.openaq.org/v3/locations`, {
-            headers: { "X-API-Key": process.env.OPENAQ_API_KEY },
-            params: { coordinates: `${lat},${lon}`, radius: 25000, limit: 1 },
-            timeout: 8000,
-          })
-          .catch(() => null), // Non-blocking failure
-        ...satelliteRequests
-      ]);
+        })
+        .catch(() => null), // Non-blocking failure
+      ...satelliteRequests,
+    ]);
 
     // Check essential requests
     const essentialFailed = [currentRes, weatherRes].some(
-      (result) => result.status === "rejected"
+      (result) => result.status === "rejected",
     );
     if (essentialFailed) {
       throw new Error("Failed to fetch essential data");
@@ -196,9 +245,9 @@ router.get("/complete", cacheMiddleware("complete"), async (req, res) => {
     satelliteResults.forEach((result, index) => {
       if (result.status === "fulfilled" && result.value) {
         const data = result.value;
-        if (data.source === 'tempo') {
+        if (data.source === "tempo") {
           satelliteData.tempo = data;
-        } else if (data.source === 'gems') {
+        } else if (data.source === "gems") {
           satelliteData.gems = data;
         }
       }
@@ -213,10 +262,13 @@ router.get("/complete", cacheMiddleware("complete"), async (req, res) => {
     // Enhance with satellite data if available
     if (satelliteData.tempo || satelliteData.gems) {
       combinedCurrent.satelliteData = satelliteData;
-      combinedCurrent.dataSource = satelliteData.tempo ? 'TEMPO + Ground' : 
-                                   satelliteData.gems ? 'GEMS + Ground' : 'Ground-based';
+      combinedCurrent.dataSource = satelliteData.tempo
+        ? "TEMPO + Ground"
+        : satelliteData.gems
+          ? "GEMS + Ground"
+          : "Ground-based";
     } else {
-      combinedCurrent.dataSource = 'Ground-based';
+      combinedCurrent.dataSource = "Ground-based";
     }
 
     res.json({
@@ -241,7 +293,7 @@ router.get("/complete", cacheMiddleware("complete"), async (req, res) => {
       satelliteCoverage: {
         tempo: isInTempoCoverage,
         gems: isInGemsCoverage,
-        satelliteData: Object.keys(satelliteData).length > 0
+        satelliteData: Object.keys(satelliteData).length > 0,
       },
       timestamp: Date.now(),
     });
@@ -254,21 +306,19 @@ router.get("/complete", cacheMiddleware("complete"), async (req, res) => {
 // Function to get GEMS data for a specific location
 async function fetchGemsDataForLocation(lon, lat) {
   try {
-    // GEMS provides image overlays, not point data
-    // We'll indicate that GEMS data is available via map layers
     return {
-      source: 'gems',
+      source: "gems",
       coverage: true,
-      note: 'GEMS satellite data available via map visualization layers',
+      note: "GEMS satellite data available via map visualization layers",
       layers: {
-        no2: '/api/gems/no2/image',
-        o3: '/api/gems/o3/image',
-        hcho: '/api/gems/hcho/image'
+        no2: "/api/gems/no2/image",
+        o3: "/api/gems/o3/image",
+        hcho: "/api/gems/hcho/image",
       },
-      lastUpdated: new Date().toISOString()
+      lastUpdated: new Date().toISOString(),
     };
   } catch (error) {
-    console.error('GEMS data fetch error:', error);
+    console.error("GEMS data fetch error:", error);
     return null;
   }
 }
@@ -279,18 +329,18 @@ async function fetchTempoDataForLocation(lon, lat) {
     // TEMPO provides Esri image services
     // We'll indicate that TEMPO data is available via map layers
     return {
-      source: 'tempo',
+      source: "tempo",
       coverage: true,
-      note: 'TEMPO satellite data available via map visualization layers',
+      note: "TEMPO satellite data available via map visualization layers",
       layers: {
-        no2: 'https://gis.earthdata.nasa.gov/image/rest/services/C3685896708-LARC_CLOUD/TEMPO_NO2_L3_V04_HOURLY_TROPOSPHERIC_VERTICAL_COLUMN/ImageServer',
-        o3: 'https://gis.earthdata.nasa.gov/image/rest/services/C3685896625-LARC_CLOUD/TEMPO_O3TOT_L3_V04_HOURLY_OZONE_COLUMN_AMOUNT/ImageServer',
-        hcho: 'https://gis.earthdata.nasa.gov/image/rest/services/C3685897141-LARC_CLOUD/TEMPO_HCHO_L3_V04_HOURLY_VERTICAL_COLUMN/ImageServer'
+        no2: "https://gis.earthdata.nasa.gov/image/rest/services/C3685896708-LARC_CLOUD/TEMPO_NO2_L3_V04_HOURLY_TROPOSPHERIC_VERTICAL_COLUMN/ImageServer",
+        o3: "https://gis.earthdata.nasa.gov/image/rest/services/C3685896625-LARC_CLOUD/TEMPO_O3TOT_L3_V04_HOURLY_OZONE_COLUMN_AMOUNT/ImageServer",
+        hcho: "https://gis.earthdata.nasa.gov/image/rest/services/C3685897141-LARC_CLOUD/TEMPO_HCHO_L3_V04_HOURLY_VERTICAL_COLUMN/ImageServer",
       },
-      lastUpdated: new Date().toISOString()
+      lastUpdated: new Date().toISOString(),
     };
   } catch (error) {
-    console.error('TEMPO data fetch error:', error);
+    console.error("TEMPO data fetch error:", error);
     return null;
   }
 }
@@ -392,7 +442,7 @@ function calculateIndividualAQI(concentration, pollutant) {
   if (!breakpoints) return 0;
 
   let breakpoint = breakpoints.find(
-    (bp) => concentration >= bp.cLow && concentration <= bp.cHigh
+    (bp) => concentration >= bp.cLow && concentration <= bp.cHigh,
   );
 
   if (!breakpoint) {
@@ -458,7 +508,7 @@ async function checkAndNotifySubscribers() {
   const Subscriber = mongoose.model("Subscriber");
   const subscribers = await Subscriber.find({ active: true });
   console.log(
-    `[Notifications] Checking AQ for ${subscribers.length} active subscribers`
+    `[Notifications] Checking AQ for ${subscribers.length} active subscribers`,
   );
   if (subscribers.length === 0) return;
 
@@ -472,7 +522,7 @@ async function checkAndNotifySubscribers() {
         const coords = parseLocationCoordinates(subscriber.locations.home);
         if (!coords) {
           console.log(
-            `[Notifications] Skipping ${subscriber.email}: invalid coordinates.`
+            `[Notifications] Skipping ${subscriber.email}: invalid coordinates.`,
           );
           return;
         }
@@ -486,7 +536,7 @@ async function checkAndNotifySubscribers() {
               appid: process.env.OPENWEATHER_API_KEY,
             },
             timeout: 5000,
-          }
+          },
         );
 
         const pollution = aqResponse.data.list[0];
@@ -501,7 +551,7 @@ async function checkAndNotifySubscribers() {
       } catch (error) {
         console.error(
           `[Notifications] Error processing AQ for ${subscriber.email}:`,
-          error.message
+          error.message,
         );
       }
     });
@@ -568,11 +618,11 @@ async function sendNotification(subscriber, aqi, components) {
   const healthAdvice = getPersonalizedHealthAdvice(
     subscriber.healthProfile,
     aqi,
-    components
+    components,
   );
 
   console.log(
-    `[Notifications] Sending alert to ${subscriber.email} - AQI: ${aqi}`
+    `[Notifications] Sending alert to ${subscriber.email} - AQI: ${aqi}`,
   );
 
   // Only send email notifications
@@ -581,18 +631,19 @@ async function sendNotification(subscriber, aqi, components) {
   // The subscriber.notificationMethods.email check is now implicit
 }
 
-// Schedule notifications check (run every hour)
-cron.schedule(
-  "0 * * * *",
-  () => {
-    console.log("[Notifications] Running scheduled check...");
-    checkAndNotifySubscribers().catch(console.error);
-  },
-  {
-    scheduled: true,
-    timezone: "UTC",
-  }
-);
+if (!IS_SERVERLESS) {
+  cron.schedule(
+    "0 * * * *",
+    () => {
+      console.log("[Notifications] Running scheduled check...");
+      checkAndNotifySubscribers().catch(console.error);
+    },
+    {
+      scheduled: true,
+      timezone: "UTC",
+    },
+  );
+}
 
 app.use((err, req, res, _next) => {
   console.error(err.stack);
@@ -601,9 +652,12 @@ app.use((err, req, res, _next) => {
 
 module.exports.checkAndNotifySubscribers = checkAndNotifySubscribers;
 module.exports.calculateOverallAQI = calculateOverallAQI;
+module.exports.connectToDB = connectToDB;
 
 module.exports.handler = serverless(app);
 
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+if (!IS_SERVERLESS) {
+  app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+  });
+}

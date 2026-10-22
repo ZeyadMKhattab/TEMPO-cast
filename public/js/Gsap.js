@@ -399,6 +399,136 @@ document.addEventListener("visibilitychange", () => {
   }
 });
 
+// Globe Animations
+function initGlobeAnimations() {
+  const globeContainer = document.getElementById('globe-container');
+  if (!globeContainer) return;
+
+  const globeWrapper = globeContainer.querySelector('.globe-wrapper');
+  const globeSphere = globeContainer.querySelector('.globe-sphere');
+  const satellites = globeContainer.querySelectorAll('.satellite');
+  const stars = globeContainer.querySelectorAll('.star');
+
+  // Initial entrance animation
+  gsap.fromTo(globeWrapper,
+    { scale: 0, rotationY: -180 },
+    { scale: 1, rotationY: 0, duration: 2, ease: "back.out(1.7)" }
+  );
+
+  gsap.fromTo('.globe-ring',
+    { scale: 0, opacity: 0 },
+    { scale: 1, opacity: 1, duration: 1.5, stagger: 0.2, ease: "elastic.out(1, 0.5)" }
+  );
+
+  gsap.fromTo(satellites,
+    { scale: 0, opacity: 0 },
+    { scale: 1, opacity: 1, duration: 1, stagger: 0.3, ease: "back.out(1.7)" }
+  );
+
+  gsap.fromTo(stars,
+    { scale: 0, opacity: 0 },
+    { scale: 1, opacity: 1, duration: 0.8, stagger: 0.1, ease: "power2.out" }
+  );
+
+  // Interactive hover effects
+  globeSphere.addEventListener('mouseenter', () => {
+    gsap.to(globeWrapper, {
+      scale: 1.1,
+      duration: 0.3,
+      ease: "power2.out"
+    });
+
+    gsap.to('.satellite-body', {
+      scale: 1.5,
+      duration: 0.3,
+      ease: "power2.out"
+    });
+
+    gsap.to('.star', {
+      scale: 1.5,
+      opacity: 1,
+      duration: 0.3,
+      ease: "power2.out"
+    });
+  });
+
+  globeSphere.addEventListener('mouseleave', () => {
+    gsap.to(globeWrapper, {
+      scale: 1,
+      duration: 0.3,
+      ease: "power2.out"
+    });
+
+    gsap.to('.satellite-body', {
+      scale: 1,
+      duration: 0.3,
+      ease: "power2.out"
+    });
+
+    gsap.to('.star', {
+      scale: 1,
+      opacity: 0.7,
+      duration: 0.3,
+      ease: "power2.out"
+    });
+  });
+
+  // Click interaction
+  globeSphere.addEventListener('click', () => {
+    gsap.to(globeWrapper, {
+      rotationY: '+=360',
+      duration: 2,
+      ease: "power2.inOut"
+    });
+
+    // Pulse effect on rings
+    gsap.to('.globe-ring', {
+      scale: 1.2,
+      opacity: 0.8,
+      duration: 0.5,
+      yoyo: true,
+      repeat: 1,
+      ease: "power2.inOut"
+    });
+
+    // Satellite boost
+    gsap.to('.satellite', {
+      scale: 1.3,
+      duration: 0.5,
+      yoyo: true,
+      repeat: 1,
+      ease: "power2.inOut"
+    });
+  });
+
+  // Continuous subtle animations
+  gsap.to('.satellite-body', {
+    boxShadow: '0 0 20px rgba(100, 200, 255, 1)',
+    duration: 2,
+    repeat: -1,
+    yoyo: true,
+    ease: "sine.inOut"
+  });
+
+  // Star twinkling variation
+  stars.forEach((star, index) => {
+    gsap.to(star, {
+      scale: gsap.utils.random(1.2, 1.8),
+      opacity: gsap.utils.random(0.5, 1),
+      duration: gsap.utils.random(2, 4),
+      repeat: -1,
+      yoyo: true,
+      ease: "sine.inOut",
+      delay: index * 0.3
+    });
+  });
+}
+
+// Initialize globe animations when DOM is ready
+document.addEventListener('DOMContentLoaded', () => {
+  initGlobeAnimations();
+});
+
 const logoElement = document.querySelector(".logo");
 if (logoElement) {
   logoElement.addEventListener("dblclick", () => {
@@ -425,6 +555,102 @@ if (logoElement) {
     }
   });
 }
+
+// Globe Animations
+function initGlobeAnimations() {
+  const globeContainer = document.getElementById('globe-container');
+  if (!globeContainer) return;
+
+  const globeSphere = globeContainer.querySelector('.globe-sphere');
+  const satellites = globeContainer.querySelectorAll('.satellite');
+  const stars = globeContainer.querySelectorAll('.star');
+
+  // Subtle entrance animation
+  gsap.fromTo(globeSphere,
+    { scale: 0.8, opacity: 0 },
+    { scale: 1, opacity: 1, duration: 1.5, ease: "back.out(1.7)" }
+  );
+
+  gsap.fromTo('.globe-ring',
+    { scale: 0, opacity: 0 },
+    { scale: 1, opacity: 1, duration: 1.5, stagger: 0.2, ease: "elastic.out(1, 0.5)" }
+  );
+
+  gsap.fromTo(satellites,
+    { scale: 0, opacity: 0 },
+    { scale: 1, opacity: 1, duration: 1, stagger: 0.3, ease: "back.out(1.7)" }
+  );
+
+  gsap.fromTo(stars,
+    { scale: 0, opacity: 0 },
+    { scale: 1, opacity: 1, duration: 0.8, stagger: 0.1, ease: "power2.out" }
+  );
+
+  // Interactive hover effects
+  globeSphere.addEventListener('mouseenter', () => {
+    gsap.to('.satellite-body', {
+      scale: 1.5,
+      duration: 0.3,
+      ease: "power2.out"
+    });
+
+    gsap.to('.star', {
+      scale: 1.5,
+      opacity: 1,
+      duration: 0.3,
+      ease: "power2.out"
+    });
+  });
+
+  globeSphere.addEventListener('mouseleave', () => {
+    gsap.to('.satellite-body', {
+      scale: 1,
+      duration: 0.3,
+      ease: "power2.out"
+    });
+
+    gsap.to('.star', {
+      scale: 1,
+      opacity: 0.7,
+      duration: 0.3,
+      ease: "power2.out"
+    });
+  });
+
+  // Click interaction
+  globeSphere.addEventListener('click', () => {
+    gsap.to('.globe-ring', {
+      scale: 1.2,
+      opacity: 0.8,
+      duration: 0.5,
+      yoyo: true,
+      repeat: 1,
+      ease: "power2.inOut"
+    });
+
+    gsap.to('.satellite', {
+      scale: 1.3,
+      duration: 0.5,
+      yoyo: true,
+      repeat: 1,
+      ease: "power2.inOut"
+    });
+  });
+
+  // Continuous subtle animations
+  gsap.to('.satellite-body', {
+    boxShadow: '0 0 20px rgba(100, 200, 255, 1)',
+    duration: 2,
+    repeat: -1,
+    yoyo: true,
+    ease: "sine.inOut"
+  });
+}
+
+// Initialize globe animations when DOM is ready
+document.addEventListener('DOMContentLoaded', () => {
+  initGlobeAnimations();
+});
 
 // Error handling for missing elements
 window.addEventListener("error", (e) => {

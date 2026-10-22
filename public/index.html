@@ -177,20 +177,54 @@
         </div>
         <div class="canvas slide-in-right">
           <div id="globe-container">
+            <!-- Animated rings -->
             <div class="globe-ring globe-ring-1"></div>
             <div class="globe-ring globe-ring-2"></div>
-            <img
-              src="./assets/a-sky-view-of-earth-from-suomi-npp_16611703184_o~medium.jpg"
-              alt="Earth"
-              style="width: 100%; height: 100%; object-fit: cover"
-            />
+            <div class="globe-ring globe-ring-3"></div>
+
+            <!-- Main globe -->
+            <div class="globe-wrapper">
+              <div class="globe-shadow"></div>
+              <div class="globe-sphere">
+                <img
+                  src="./assets/globe_east.jpg"
+                  alt="Earth"
+                  class="globe-image"
+                />
+                <div class="globe-overlay"></div>
+              </div>
+            </div>
+
+            <!-- Satellite elements -->
+            <div class="satellite satellite-1">
+              <div class="satellite-body"></div>
+              <div class="satellite-trail"></div>
+            </div>
+            <div class="satellite satellite-2">
+              <div class="satellite-body"></div>
+              <div class="satellite-trail"></div>
+            </div>
+
+            <!-- Star field -->
+            <div class="stars">
+              <div class="star star-1"></div>
+              <div class="star star-2"></div>
+              <div class="star star-3"></div>
+              <div class="star star-4"></div>
+              <div class="star star-5"></div>
+              <div class="star star-6"></div>
+            </div>
           </div>
-          <p class="fade-in">
-            Satellite: Suomi-NPP Sensor: VIIRS Date: 9 April 2015 Description:
-            Data from six orbits of the Suomi-NPP spacecraft have been assembled
-            into this perspective composite of southern Africa and the
-            surrounding oceans. Tropical Cyclone Joalane is seen over the Indian
-            Ocean.
+          <p class="fade-in globe-description">
+            <span class="satellite-info">🛰️ Satellite: Suomi-NPP</span>
+            <span class="sensor-info">📡 Sensor: VIIRS</span>
+            <span class="date-info">📅 Date: 9 April 2015</span>
+            <br>
+            <span class="description-text">
+              Data from six orbits of the Suomi-NPP spacecraft have been assembled
+              into this perspective composite of southern Africa and the
+              surrounding oceans. Tropical Cyclone Joalane is seen over the Indian Ocean.
+            </span>
           </p>
         </div>
       </section>

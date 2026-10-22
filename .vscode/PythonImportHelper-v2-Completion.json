@@ -1,0 +1,92 @@
+[
+    {
+        "label": "pyrsig",
+        "kind": 6,
+        "isExtraImport": true,
+        "importPath": "pyrsig",
+        "description": "pyrsig",
+        "detail": "pyrsig",
+        "documentation": {}
+    },
+    {
+        "label": "pandas",
+        "kind": 6,
+        "isExtraImport": true,
+        "importPath": "pandas",
+        "description": "pandas",
+        "detail": "pandas",
+        "documentation": {}
+    },
+    {
+        "label": "matplotlib.pyplot",
+        "kind": 6,
+        "isExtraImport": true,
+        "importPath": "matplotlib.pyplot",
+        "description": "matplotlib.pyplot",
+        "detail": "matplotlib.pyplot",
+        "documentation": {}
+    },
+    {
+        "label": "locname",
+        "kind": 5,
+        "importPath": "Services.DataToJson",
+        "description": "Services.DataToJson",
+        "peekOfCode": "locname = \"nyc\"\nbbox = (-74.8, 40.32, -71.43, 41.4)\napi = pyrsig.RsigApi(bdate=\"15:00\", edate=\"18:00\", bbox=bbox, workdir=locname, gridfit=True)\napi_key = \"anonymous\" \napi.tempo_kw[\"api_key\"] = api_key\ndescdf = api.descriptions()\nprint(\"--- Available Data ---\")\nprint(descdf)\nspecies_to_process = {\n    \"no2\": \"tempo.l2.no2.vertical_column_troposphere\",",
+        "detail": "Services.DataToJson",
+        "documentation": {}
+    },
+    {
+        "label": "bbox",
+        "kind": 5,
+        "importPath": "Services.DataToJson",
+        "description": "Services.DataToJson",
+        "peekOfCode": "bbox = (-74.8, 40.32, -71.43, 41.4)\napi = pyrsig.RsigApi(bdate=\"15:00\", edate=\"18:00\", bbox=bbox, workdir=locname, gridfit=True)\napi_key = \"anonymous\" \napi.tempo_kw[\"api_key\"] = api_key\ndescdf = api.descriptions()\nprint(\"--- Available Data ---\")\nprint(descdf)\nspecies_to_process = {\n    \"no2\": \"tempo.l2.no2.vertical_column_troposphere\",\n    \"hcho\": \"tempo.l2.hcho.vertical_column\",",
+        "detail": "Services.DataToJson",
+        "documentation": {}
+    },
+    {
+        "label": "api",
+        "kind": 5,
+        "importPath": "Services.DataToJson",
+        "description": "Services.DataToJson",
+        "peekOfCode": "api = pyrsig.RsigApi(bdate=\"15:00\", edate=\"18:00\", bbox=bbox, workdir=locname, gridfit=True)\napi_key = \"anonymous\" \napi.tempo_kw[\"api_key\"] = api_key\ndescdf = api.descriptions()\nprint(\"--- Available Data ---\")\nprint(descdf)\nspecies_to_process = {\n    \"no2\": \"tempo.l2.no2.vertical_column_troposphere\",\n    \"hcho\": \"tempo.l2.hcho.vertical_column\",\n    \"o3\": \"tempo.l2.o3.vertical_column\"",
+        "detail": "Services.DataToJson",
+        "documentation": {}
+    },
+    {
+        "label": "api_key",
+        "kind": 5,
+        "importPath": "Services.DataToJson",
+        "description": "Services.DataToJson",
+        "peekOfCode": "api_key = \"anonymous\" \napi.tempo_kw[\"api_key\"] = api_key\ndescdf = api.descriptions()\nprint(\"--- Available Data ---\")\nprint(descdf)\nspecies_to_process = {\n    \"no2\": \"tempo.l2.no2.vertical_column_troposphere\",\n    \"hcho\": \"tempo.l2.hcho.vertical_column\",\n    \"o3\": \"tempo.l2.o3.vertical_column\"\n}",
+        "detail": "Services.DataToJson",
+        "documentation": {}
+    },
+    {
+        "label": "api.tempo_kw[\"api_key\"]",
+        "kind": 5,
+        "importPath": "Services.DataToJson",
+        "description": "Services.DataToJson",
+        "peekOfCode": "api.tempo_kw[\"api_key\"] = api_key\ndescdf = api.descriptions()\nprint(\"--- Available Data ---\")\nprint(descdf)\nspecies_to_process = {\n    \"no2\": \"tempo.l2.no2.vertical_column_troposphere\",\n    \"hcho\": \"tempo.l2.hcho.vertical_column\",\n    \"o3\": \"tempo.l2.o3.vertical_column\"\n}\nfor species, tempokey in species_to_process.items():",
+        "detail": "Services.DataToJson",
+        "documentation": {}
+    },
+    {
+        "label": "descdf",
+        "kind": 5,
+        "importPath": "Services.DataToJson",
+        "description": "Services.DataToJson",
+        "peekOfCode": "descdf = api.descriptions()\nprint(\"--- Available Data ---\")\nprint(descdf)\nspecies_to_process = {\n    \"no2\": \"tempo.l2.no2.vertical_column_troposphere\",\n    \"hcho\": \"tempo.l2.hcho.vertical_column\",\n    \"o3\": \"tempo.l2.o3.vertical_column\"\n}\nfor species, tempokey in species_to_process.items():\n    print(f\"\\n--- Processing {species.upper()} data for key: {tempokey} ---\")",
+        "detail": "Services.DataToJson",
+        "documentation": {}
+    },
+    {
+        "label": "species_to_process",
+        "kind": 5,
+        "importPath": "Services.DataToJson",
+        "description": "Services.DataToJson",
+        "peekOfCode": "species_to_process = {\n    \"no2\": \"tempo.l2.no2.vertical_column_troposphere\",\n    \"hcho\": \"tempo.l2.hcho.vertical_column\",\n    \"o3\": \"tempo.l2.o3.vertical_column\"\n}\nfor species, tempokey in species_to_process.items():\n    print(f\"\\n--- Processing {species.upper()} data for key: {tempokey} ---\")\n    if tempokey not in descdf['name'].values:\n        print(f\"Warning: Key '{tempokey}' not found in descriptions. Skipping.\")\n        continue",
+        "detail": "Services.DataToJson",
+        "documentation": {}
+    }
+]

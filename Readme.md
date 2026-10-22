@@ -132,6 +132,12 @@ Open your browser and navigate to:
 http://localhost:3000
 ```
 
+### Deploying to Netlify
+
+In the Netlify site settings, add `MONGODB_URI` and the API/email variables used by the app as environment variables, then redeploy. `MONGODB_URI` must be a MongoDB Atlas connection string; the local MongoDB fallback is intentionally not used by Netlify Functions. Make sure the Atlas cluster's network access rules allow connections from your Netlify deployment.
+
+Netlify Functions use Netlify's DNS resolver, so the local `127.0.0.1` DNS issue does not require hardcoding a public DNS server in the application. Subscriber notifications run through the hourly `notifications-schedule` function on Netlify.
+
 ---
 
 ## 👤 Authors
